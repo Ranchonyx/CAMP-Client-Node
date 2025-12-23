@@ -134,9 +134,9 @@ export class CryoClientWebsocketSession extends EventEmitter {
         socket.on("error", this.HandleError.bind(this));
         socket.on("close", this.HandleClose.bind(this));
     }
-    static async Connect(host, bearer, use_cale = true, timeout = 5000, maxPayload = 256 * 1024 * 1024) {
+    static async Connect(host, bearer, additionalQueryParamsMap, use_cale = true, timeout = 5000, maxPayload = 256 * 1024 * 1024) {
         const sid = randomUUID();
-        const connHelper = new CryoConnectionHelper(host, bearer, sid, timeout, maxPayload);
+        const connHelper = new CryoConnectionHelper(host, bearer, sid, timeout, maxPayload, additionalQueryParamsMap);
         const socket = await connHelper.Acquire();
         return new CryoClientWebsocketSession(socket, connHelper, sid, use_cale);
     }

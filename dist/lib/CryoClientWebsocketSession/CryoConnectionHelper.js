@@ -3,16 +3,22 @@ import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
 export class CryoConnectionHelper {
     connectionTimeout;
     maxPayload;
+    additionalQueryParamsMap;
     log;
     socket = null;
     url;
-    constructor(host, bearer, sid, connectionTimeout, maxPayload = 256 * 1024 * 1024, log = CreateDebugLogger("CRYO_CONNECTION_HELPER")) {
+    constructor(host, bearer, sid, connectionTimeout, maxPayload = 256 * 1024 * 1024, additionalQueryParamsMap, log = CreateDebugLogger("CRYO_CONNECTION_HELPER")) {
         this.connectionTimeout = connectionTimeout;
         this.maxPayload = maxPayload;
+        this.additionalQueryParamsMap = additionalQueryParamsMap;
         this.log = log;
         this.url = new URL(host);
         this.url.searchParams.set("authorization", `Bearer ${bearer}`);
         this.url.searchParams.set("x-cryo-sid", sid);
+        for (const [key, value] of Object.entries(this.additionalQueryParamsMap)) {
+            this.url.searchParams.set(key, value);
+        }
+        ;
     }
     async ConnectSocket() {
         return new Promise((resolve, reject) => {
@@ -59,7 +65,7 @@ export class CryoConnectionHelper {
             currentAttempt++;
         }
         //If we got here, we were unable to contact the server. give up!
-        throw new Error(`Unable to connect to '${this.url}' after ${maxAttempts}. Giving up.`);
+        throw new Error(`Unable to connect to '${this.url.host}' after ${maxAttempts} attempts. Giving up.`);
     }
     /*
     * Acquires the websocket
