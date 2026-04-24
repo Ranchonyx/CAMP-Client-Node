@@ -26,7 +26,7 @@ export class ErrorFrame {
 
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUint8(BinaryMessageType.ERROR, 16);
-        msg_buf.writeUInt32BE(ack, 20);
+        msg_buf.writeUInt32BE(ack, 17);
 
         msg_buf.write(payload || "unknown_error", 21);
 

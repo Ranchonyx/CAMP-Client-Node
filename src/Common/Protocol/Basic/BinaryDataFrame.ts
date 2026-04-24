@@ -27,7 +27,7 @@ export class BinaryDataFrame {
 
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUint8(BinaryMessageType.BINARYDATA, 16);
-        msg_buf.writeUInt32BE(ack, 20);
+        msg_buf.writeUInt32BE(ack, 17);
 
         msg_buf.set(payload || Buffer.from("null", "utf-8"), 21);
 

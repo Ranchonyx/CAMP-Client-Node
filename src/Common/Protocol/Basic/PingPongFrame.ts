@@ -29,7 +29,7 @@ export class PingPongFrame {
 
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUint8(BinaryMessageType.PING_PONG, 16);
-        msg_buf.writeUInt32BE(ack, 20);
+        msg_buf.writeUInt32BE(ack, 17);
 
         msg_buf.write(payload, 21);
 
