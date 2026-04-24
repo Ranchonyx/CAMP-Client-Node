@@ -1,35 +1,23 @@
-import CryoFrameFormatter, {BinaryMessageType} from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
-import {DebugLoggerFunction} from "node:util";
-import {CreateDebugLogger} from "../Common/Util/CreateDebugLogger.js";
-
-interface RouterHandlers {
-    //Normal frame routing
-    on_ping_pong: (frame: Buffer) => Promise<void>;
-    on_ack: (frame: Buffer) => Promise<void>;
-    on_error: (frame: Buffer) => Promise<void>;
-    on_utf8: (frame: Buffer) => Promise<void>;
-    on_binary: (frame: Buffer) => Promise<void>;
-
-    //Handshake frame routing should go to the HandshakeEngine
-    on_server_hello?: (frame: Buffer) => Promise<void>;
-    on_client_hello?: (frame: Buffer) => Promise<void>;
-    on_handshake_done?: (frame: Buffer) => Promise<void>;
-}
-
+import CryoFrameFormatter, { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
+import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
 export class CryoFrameRouter {
-    public constructor(
-        private readonly formatter: typeof CryoFrameFormatter,
-        private readonly is_secure: () => boolean,
-        private readonly decrypt: (buffer: Buffer) => Buffer,
-        private readonly handlers: RouterHandlers,
-        private log: DebugLoggerFunction = CreateDebugLogger("CRYO_FRAME_ROUTER")
-    ) {
+    formatter;
+    is_secure;
+    decrypt;
+    handlers;
+    log;
+    constructor(formatter, is_secure, decrypt, handlers, log = CreateDebugLogger("CRYO_FRAME_ROUTER")) {
+        this.formatter = formatter;
+        this.is_secure = is_secure;
+        this.decrypt = decrypt;
+        this.handlers = handlers;
+        this.log = log;
     }
-
-    private try_get_type(frame: Buffer): BinaryMessageType | null {
+    try_get_type(frame) {
         try {
             return CryoFrameFormatter.GetType(frame);
-        } catch (e) {
+        }
+        catch (e) {
             return null;
         }
         /*        if(!buf || buf.length < 21)
@@ -38,26 +26,23 @@ export class CryoFrameRouter {
                 const type_byte = buf.readUint8(20);
                 return type_byte <= BinaryMessageType.HANDSHAKE_DONE ? type_byte as BinaryMessageType : null;*/
     }
-
-    public async do_route(raw: Buffer): Promise<void> {
-        let frame: Buffer = raw;
-        let type: BinaryMessageType | null = this.try_get_type(raw);
-
+    async do_route(raw) {
+        let frame = raw;
+        let type = this.try_get_type(raw);
         if (type === null && this.is_secure()) {
             try {
                 frame = this.decrypt(raw);
                 type = this.try_get_type(frame);
-            } catch (e) {
+            }
+            catch (e) {
                 this.log(`Decryption failed: ${e}`, raw);
                 return;
             }
         }
-
         if (type === null) {
             this.log(`Unknown frame type`, raw);
             return;
         }
-
         switch (type) {
             case BinaryMessageType.PING_PONG:
                 await this.handlers.on_ping_pong(frame);

@@ -1,0 +1,36 @@
+import type {UUID} from "node:crypto";
+import {BinaryMessageType, PingMessage} from "../defs.js";
+import {BufferUtil} from "../BufferUtil.js";
+
+export class PingPongFrame {
+    public static Deserialize(value: Buffer): PingMessage {
+        const sid = BufferUtil.sidFromBuffer(value);
+        const ack = value.readUInt32BE(16);
+        const type = value.readUint8(20);
+        const payload = value.subarray(21).toString("utf8");
+        if (type !== BinaryMessageType.PING_PONG)
+            throw new Error("Attempt to deserialize a non-ping_pong binary message!");
+
+        if (!(payload === "ping" || payload === "pong"))
+            throw new Error(`Invalid payload ${payload} in ping_pong binary message!`);
+
+        return {
+            sid,
+            ack,
+            type,
+            payload
+        }
+    }
+
+    public static Serialize(sid: UUID, ack: number, payload: "ping" | "pong"): Buffer {
+        const msg_buf = Buffer.alloc(16 + 4 + 1 + 4);
+        const sid_buf = BufferUtil.sidToBuffer(sid);
+
+        sid_buf.copy(msg_buf, 0);
+        msg_buf.writeUInt32BE(ack, 16);
+        msg_buf.writeUint8(BinaryMessageType.PING_PONG, 20);
+        msg_buf.write(payload, 21);
+
+        return msg_buf;
+    }
+}

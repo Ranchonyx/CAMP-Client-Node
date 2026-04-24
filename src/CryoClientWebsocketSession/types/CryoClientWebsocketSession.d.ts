@@ -5,6 +5,10 @@ export interface ICryoClientWebsocketSessionEvents {
     "connected": () => void;
     "disconnected": () => void;
     "reconnected": () => void;
+
+    "tx-start": (txId: number) => Promise<void>;
+    "tx-chunk": (txId: number, data: Buffer) => Promise<void>;
+    "tx-finish": (txId: number) => Promise<void>;
 }
 
 export type PendingBinaryMessage = {

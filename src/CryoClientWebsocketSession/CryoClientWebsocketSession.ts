@@ -1,16 +1,23 @@
 import {ICryoClientWebsocketSessionEvents, PendingBinaryMessage} from "./types/CryoClientWebsocketSession.js";
 import EventEmitter from "node:events";
 import {AckTracker} from "../Common/AckTracker/AckTracker.js";
-import CryoFrameFormatter, {BinaryMessageType} from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
 import {CryoFrameInspector} from "../Common/CryoFrameInspector/CryoFrameInspector.js";
 import {randomUUID, UUID} from "node:crypto";
 import {DebugLoggerFunction} from "node:util";
 import {CreateDebugLogger} from "../Common/Util/CreateDebugLogger.js";
 import WebSocket from "ws";
-import {CryoCryptoBox} from "./CryoCryptoBox.js";
-import {CryoHandshakeEngine, HandshakeEvents} from "./CryoHandshakeEngine.js";
-import {CryoFrameRouter} from "./CryoFrameRouter.js";
 import {CryoConnectionHelper} from "./CryoConnectionHelper.js";
+import {BufferUtil} from "../Common/Protocol/BufferUtil.js";
+import {BinaryMessageType} from "../Common/Protocol/defs.js";
+import {PingPongFrame} from "../Common/Protocol/Basic/PingPongFrame.js";
+import {ErrorFrame} from "../Common/Protocol/Basic/ErrorFrame.js";
+import {ACKFrame} from "../Common/Protocol/Basic/ACKFrame.js";
+import {Utf8DataFrame} from "../Common/Protocol/Basic/Utf8DataFrame.js";
+import {TXStartFrame} from "../Common/Protocol/Transaction/TXStartFrame.js";
+import {TXFinishFrame} from "../Common/Protocol/Transaction/TXFinishFrame.js";
+import {TXChunkFrame} from "../Common/Protocol/Transaction/TXChunkFrame.js";
+import {BinaryDataFrame} from "../Common/Protocol/Basic/BinaryDataFrame.js";
+import {Readable} from "node:stream";
 
 export interface CryoClientWebsocketSession {
     on<U extends keyof ICryoClientWebsocketSessionEvents>(event: U, listener: ICryoClientWebsocketSessionEvents[U]): this;
@@ -21,9 +28,7 @@ export interface CryoClientWebsocketSession {
 enum CryoCloseCode {
     CLOSE_GRACEFUL = 4000,
     CLOSE_CLIENT_ERROR = 4001,
-    CLOSE_SERVER_ERROR = 4002,
-    CLOSE_CALE_MISMATCH = 4010,
-    CLOSE_CALE_HANDSHAKE = 4011
+    CLOSE_SERVER_ERROR = 4002
 }
 
 enum WebsocketCloseCode {
@@ -41,8 +46,9 @@ enum WebsocketCloseCode {
     TLS_HANDSHAKE_FAILED = 1015
 }
 
-const DoNotReconnect = [WebsocketCloseCode.NORMAL, WebsocketCloseCode.GOING_AWAY, CryoCloseCode.CLOSE_GRACEFUL] as const;
 const DoReconnect = [WebsocketCloseCode.NORMAL, WebsocketCloseCode.GOING_AWAY, CryoCloseCode.CLOSE_GRACEFUL] as const;
+/*
+const DoNotReconnect = [WebsocketCloseCode.NORMAL, WebsocketCloseCode.GOING_AWAY, CryoCloseCode.CLOSE_GRACEFUL] as const;
 const Fatal = [
     WebsocketCloseCode.PROTOCOL_ERROR,
     WebsocketCloseCode.UNSUPPORTED_DATA,
@@ -55,6 +61,7 @@ const Fatal = [
     WebsocketCloseCode.TRY_AGAIN_LATER,
     WebsocketCloseCode.TLS_HANDSHAKE_FAILED,
 ];
+*/
 
 /*
 * Cryo Websocket session layer. Handles Binary formatting and ACKs and whatnot
@@ -62,100 +69,18 @@ const Fatal = [
 export class CryoClientWebsocketSession extends EventEmitter implements CryoClientWebsocketSession {
     private server_ack_tracker: AckTracker = new AckTracker();
     private current_ack = 0;
-
-    private readonly ping_pong_formatter = CryoFrameFormatter.GetFormatter("ping_pong");
-    private readonly ack_formatter = CryoFrameFormatter.GetFormatter("ack");
-    private readonly error_formatter = CryoFrameFormatter.GetFormatter("error");
-    private readonly utf8_formatter = CryoFrameFormatter.GetFormatter("utf8data");
-    private readonly binary_formatter = CryoFrameFormatter.GetFormatter("binarydata");
-
-    private crypto: CryoCryptoBox | null = null;
-    private handshake: CryoHandshakeEngine | null = null;
-    private router: CryoFrameRouter;
+    private current_txid = 0;
 
     private constructor(private socket: WebSocket, private connectionHelper: CryoConnectionHelper, private sid: UUID, private use_cale: boolean = true, private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
-        if (use_cale) {
-            const handshake_events: HandshakeEvents = {
-                onSecure: ({transmit_key, receive_key}) => {
-                    this.crypto = new CryoCryptoBox(transmit_key, receive_key);
-                    this.log("Channel secured.");
-                    this.emit("connected"); // only emit once we’re secure
-                },
-                onFailure: (reason: string) => {
-                    this.log(`Handshake failure: ${reason}`);
-                    this.Destroy(CryoCloseCode.CLOSE_CALE_HANDSHAKE, "Failure during CALE handshake.");
-                }
-            };
-
-            this.handshake = new CryoHandshakeEngine(
-                this.sid,
-                async (buf) => this.socket.send(buf), // raw plaintext send
-                CryoFrameFormatter,
-                () => this.current_ack++,
-                handshake_events,
-            );
-
-            this.router = new CryoFrameRouter(
-                CryoFrameFormatter,
-                () => this.handshake!.is_secure,
-                (b) => this.crypto!.decrypt(b),
-                {
-                    on_ping_pong: async (b) => this.HandlePingPongMessage(b),
-                    on_ack: async (b) => this.HandleAckMessage(b),
-                    on_error: async (b) => this.HandleErrorMessage(b),
-                    on_utf8: async (b) => this.HandleUTF8DataMessage(b),
-                    on_binary: async (b) => this.HandleBinaryDataMessage(b),
-
-                    on_server_hello: async (b) => this.handshake!.on_server_hello(b),
-                    on_handshake_done: async (b) => this.handshake!.on_server_handshake_done(b)
-                }
-            );
-        } else {
-            this.log("CALE disabled, running in unencrypted mode.");
-            this.router = new CryoFrameRouter(
-                CryoFrameFormatter,
-                () => false,
-                (b) => b,
-                {
-                    on_ping_pong: async (b) => this.HandlePingPongMessage(b),
-                    on_ack: async (b) => this.HandleAckMessage(b),
-                    on_error: async (b) => this.HandleErrorMessage(b),
-                    on_utf8: async (b) => this.HandleUTF8DataMessage(b),
-                    on_binary: async (b) => this.HandleBinaryDataMessage(b),
-                    on_server_hello: async (_b) => this.Destroy(CryoCloseCode.CLOSE_CALE_MISMATCH, "CALE Mismatch. The server excepts CALE encryption, which is currently disabled.")
-                }
-            );
-
-            setImmediate(() => this.emit("connected"));
-        }
-
         this.AttachListenersToSocket(socket);
+        setImmediate(() => this.emit("connected"));
     }
 
     private AttachListenersToSocket(socket: WebSocket) {
-        if (this.use_cale) {
-            socket.once("message", (raw: Buffer) => {
-                //If the first read frame IS NOT SERVER_HELLO, fail and die in an explosion.
-                const type = CryoFrameFormatter.GetType(raw);
-
-                if (type !== BinaryMessageType.SERVER_HELLO) {
-                    this.log(`CALE mismatch: expected SERVER_HELLO, got ${type}`);
-                    this.Destroy(1002, "CALE mismatch: The server has disabled CALE.");
-                    return;
-                }
-
-                this.router.do_route(raw).then(() => {
-                    socket.on("message", async (msg: Buffer) => {
-                        await this.router.do_route(msg);
-                    });
-                })
-            });
-        } else {
-            socket.on("message", async (raw: Buffer) => {
-                await this.router.do_route(raw);
-            });
-        }
+        socket.on("message", async (frame: Buffer) => {
+            await this.routeFrame(frame);
+        });
 
         socket.on("error", this.HandleError.bind(this));
         socket.on("close", this.HandleClose.bind(this));
@@ -170,14 +95,47 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         return new CryoClientWebsocketSession(socket, connHelper, sid, use_cale);
     }
 
+    public async routeFrame(frame: Buffer): Promise<void> {
+        const type = BufferUtil.GetType(frame);
+
+        switch (type) {
+            case BinaryMessageType.PING_PONG:
+                await this.HandlePingPongMessage(frame);
+                return;
+            case BinaryMessageType.ERROR:
+                await this.HandleErrorMessage(frame);
+                return;
+            case BinaryMessageType.ACK:
+                await this.HandleAckMessage(frame);
+                return;
+            case BinaryMessageType.UTF8DATA:
+                await this.HandleUTF8DataMessage(frame);
+                return;
+            case BinaryMessageType.BINARYDATA:
+                await this.HandleBinaryDataMessage(frame);
+                return;
+            case BinaryMessageType.TX_START:
+                await this.HandleTxStartMessage(frame);
+                return;
+            case BinaryMessageType.TX_CHUNK:
+                await this.HandleTxChunkMessage(frame);
+                return;
+            case BinaryMessageType.TX_FINISH:
+                await this.HandleTxFinishMessage(frame);
+                return;
+            default:
+                this.log(`Unsupported binary message type ${type}!`);
+        }
+    }
+
     /*
     * Handle an outgoing binary message
     * */
-    private HandleOutgoingBinaryMessage(outgoing_message: Buffer): void {
+    private Send(outgoing_message: Buffer): void {
         //Create a pending message with a new ack number and queue it for acknowledgement by the server
-        const type = CryoFrameFormatter.GetType(outgoing_message);
+        const type = BufferUtil.GetType(outgoing_message);
         if (type === BinaryMessageType.UTF8DATA || type === BinaryMessageType.BINARYDATA) {
-            const message_ack = CryoFrameFormatter.GetAck(outgoing_message);
+            const message_ack = BufferUtil.GetAck(outgoing_message);
             this.server_ack_tracker.Track(message_ack, {
                 timestamp: Date.now(),
                 message: outgoing_message
@@ -188,12 +146,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         if (!this.socket)
             return;
 
-        let message = outgoing_message;
-        if (this.use_cale && this.secure) {
-            message = this.crypto!.encrypt(outgoing_message);
-        }
-
-        this.socket.send(message, (maybe_error) => {
+        this.socket.send(outgoing_message, (maybe_error) => {
             if (maybe_error)
                 this.HandleError(maybe_error).then(r => null);
         });
@@ -205,20 +158,20 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     * Respond to PONG frames with PING and vice versa
     * */
     private async HandlePingPongMessage(message: Buffer): Promise<void> {
-        const decodedPingPongMessage = this.ping_pong_formatter
+        const decodedPingPongMessage = PingPongFrame
             .Deserialize(message);
 
-        const ping_pongMessage = this.ping_pong_formatter
+        const ping_pongMessage = PingPongFrame
             .Serialize(this.sid, decodedPingPongMessage.ack, decodedPingPongMessage.payload === "pong" ? "ping" : "pong");
 
-        this.HandleOutgoingBinaryMessage(ping_pongMessage);
+        this.Send(ping_pongMessage);
     }
 
     /*
     * Handling of binary error messages from the server, currently just log it
     * */
     private async HandleErrorMessage(message: Buffer): Promise<void> {
-        const decodedErrorMessage = this.error_formatter
+        const decodedErrorMessage = ErrorFrame
             .Deserialize(message);
 
         this.log(decodedErrorMessage.payload);
@@ -228,7 +181,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     * Locally ACK the pending message if it matches the server's ACK
     * */
     private async HandleAckMessage(message: Buffer): Promise<void> {
-        const decodedAckMessage = this.ack_formatter
+        const decodedAckMessage = ACKFrame
             .Deserialize(message);
         const ack_id = decodedAckMessage.ack;
 
@@ -246,15 +199,15 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     * Extract payload from the binary message and emit the message event with the utf8 payload
     * */
     private async HandleUTF8DataMessage(message: Buffer): Promise<void> {
-        const decodedDataMessage = this.utf8_formatter
+        const decodedDataMessage = Utf8DataFrame
             .Deserialize(message);
 
         const payload = decodedDataMessage.payload;
 
-        const encodedAckMessage = this.ack_formatter
+        const encodedAckMessage = ACKFrame
             .Serialize(this.sid, decodedDataMessage.ack);
 
-        this.HandleOutgoingBinaryMessage(encodedAckMessage);
+        this.Send(encodedAckMessage);
         this.emit("message-utf8", payload);
     }
 
@@ -262,16 +215,49 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     * Extract payload from the binary message and emit the message event with the utf8 payload
     * */
     private async HandleBinaryDataMessage(message: Buffer): Promise<void> {
-        const decodedDataMessage = this.binary_formatter
+        const decodedDataMessage = BinaryDataFrame
             .Deserialize(message);
 
         const payload = decodedDataMessage.payload;
 
-        const encodedAckMessage = this.ack_formatter
+        const encodedAckMessage = ACKFrame
             .Serialize(this.sid, decodedDataMessage.ack);
 
-        this.HandleOutgoingBinaryMessage(encodedAckMessage);
+        this.Send(encodedAckMessage);
         this.emit("message-binary", payload);
+    }
+
+    private async HandleTxStartMessage(message: Buffer): Promise<void> {
+        const decodedStartFrame = TXStartFrame
+            .Deserialize(message);
+
+        const ack_id = decodedStartFrame.ack;
+        const encodedACKMessage = ACKFrame
+            .Serialize(this.sid, ack_id);
+
+        await this.Send(encodedACKMessage);
+
+        this.emit("tx-start", decodedStartFrame.txId);
+    }
+
+    private async HandleTxFinishMessage(message: Buffer): Promise<void> {
+        const decodedFinishFrame = TXFinishFrame
+            .Deserialize(message);
+
+        const ack_id = decodedFinishFrame.ack;
+        const encodedACKMessage = ACKFrame
+            .Serialize(this.sid, ack_id);
+
+        await this.Send(encodedACKMessage);
+
+        this.emit("tx-finish", decodedFinishFrame.txId);
+    }
+
+    private async HandleTxChunkMessage(message: Buffer): Promise<void> {
+        const decodedChunkFrame = TXChunkFrame
+            .Deserialize(message);
+
+        this.emit("tx-chunk", decodedChunkFrame.txId, decodedChunkFrame.payload);
     }
 
     private async HandleError(err: Error) {
@@ -309,10 +295,6 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                 return "Connection closed due to a client error.";
             case CryoCloseCode.CLOSE_SERVER_ERROR:
                 return "Connection closed due to a server error.";
-            case CryoCloseCode.CLOSE_CALE_MISMATCH:
-                return "Connection closed due to a mismatch in client/server CALE configuration.";
-            case CryoCloseCode.CLOSE_CALE_HANDSHAKE:
-                return "Connection closed due to an error in the CALE handshake.";
             default:
                 return "Unspecified cause for connection closure.";
         }
@@ -341,38 +323,71 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     * Send an utf8 message to the server
     * */
     public SendUTF8(message: string): void {
-        const new_ack_id = this.current_ack++;
+        const new_ack_id = this.inc_get_ack();
 
-        const formatted_message = CryoFrameFormatter
-            .GetFormatter("utf8data")
+        const formatted_message = Utf8DataFrame
             .Serialize(this.sid, new_ack_id, message);
 
-        this.HandleOutgoingBinaryMessage(formatted_message);
+        this.Send(formatted_message);
     }
 
     /*
     * Send a binary message to the server
     * */
     public SendBinary(message: Buffer): void {
-        const new_ack_id = this.current_ack++;
+        const new_ack_id = this.inc_get_ack();
 
-        const formatted_message = CryoFrameFormatter
-            .GetFormatter("binarydata")
+        const formatted_message = BinaryDataFrame
             .Serialize(this.sid, new_ack_id, message);
 
-        this.HandleOutgoingBinaryMessage(formatted_message);
+        this.Send(formatted_message);
+    }
+
+    public async Stream(source: Readable) {
+        return new Promise<void>((resolve, reject) => {
+            const new_ack_id = this.inc_get_ack();
+            const new_txid = this.inc_get_txid();
+
+            const start_frame = TXStartFrame.Serialize(this.sid, new_ack_id, new_txid);
+            this.Send(start_frame);
+
+            source.on("data", (chunk: Buffer) => {
+                const chunk_frame = TXChunkFrame.Serialize(this.sid, new_txid, chunk);
+                this.Send(chunk_frame);
+            });
+
+            source.on("end", () => {
+                const finish_frame = TXFinishFrame.Serialize(this.sid, this.inc_get_ack(), new_txid);
+                this.Send(finish_frame);
+                resolve();
+            })
+
+            source.on("error", (err) => {
+                reject(err);
+            })
+        });
     }
 
     public Close(): void {
         this.Destroy(CryoCloseCode.CLOSE_GRACEFUL, "Client finished.");
     }
 
-    public get secure(): boolean {
-        return this.use_cale && this.crypto !== null;
-    }
-
     public get session_id(): UUID {
         return this.sid;
+    }
+
+    private inc_get_txid(): number {
+        if (this.current_txid + 1 > 0xffffffff)
+            this.current_txid = 0;
+
+        return this.current_txid++;
+    }
+
+    private inc_get_ack(): number {
+        if (this.current_ack + 1 > 0xffffffff)
+            this.current_ack = 0;
+
+        return this.current_ack++;
     }
 
     public Destroy(code: number = 1000, message: string = "") {

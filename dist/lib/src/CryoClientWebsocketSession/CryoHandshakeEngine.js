@@ -1,93 +1,75 @@
-import {createECDH, createHash, UUID} from "node:crypto";
+import { createECDH, createHash } from "node:crypto";
 import CryoFrameFormatter from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
-
-export enum HandshakeState {
-    INITIAL = 0,
-    WAIT_SERVER_HELLO = 1,
-    WAIT_SERVER_DONE = 2,
-    SECURE = 3
-}
-
-type CryptoKeys = { receive_key: Buffer, transmit_key: Buffer };
-
-export interface HandshakeEvents {
-    onSecure: (keys: CryptoKeys) => void;
-    onFailure: (reason: string) => void;
-}
-
+export var HandshakeState;
+(function (HandshakeState) {
+    HandshakeState[HandshakeState["INITIAL"] = 0] = "INITIAL";
+    HandshakeState[HandshakeState["WAIT_SERVER_HELLO"] = 1] = "WAIT_SERVER_HELLO";
+    HandshakeState[HandshakeState["WAIT_SERVER_DONE"] = 2] = "WAIT_SERVER_DONE";
+    HandshakeState[HandshakeState["SECURE"] = 3] = "SECURE";
+})(HandshakeState || (HandshakeState = {}));
 export class CryoHandshakeEngine {
-    private readonly ECDH_CURVE_NAME = "prime256v1";
-    private handshake_state: HandshakeState = HandshakeState.INITIAL;
-    private ecdh = createECDH(this.ECDH_CURVE_NAME);
-    private receive_key: Buffer | null = null;
-    private transmit_key: Buffer | null = null;
-
-    public constructor(
-        private readonly sid: UUID,
-        private send_plain: (buf: Buffer) => Promise<void>,
-        private formatter: typeof CryoFrameFormatter,
-        private next_ack: () => number,
-        private events: HandshakeEvents
-    ) {
+    sid;
+    send_plain;
+    formatter;
+    next_ack;
+    events;
+    ECDH_CURVE_NAME = "prime256v1";
+    handshake_state = HandshakeState.INITIAL;
+    ecdh = createECDH(this.ECDH_CURVE_NAME);
+    receive_key = null;
+    transmit_key = null;
+    constructor(sid, send_plain, formatter, next_ack, events) {
+        this.sid = sid;
+        this.send_plain = send_plain;
+        this.formatter = formatter;
+        this.next_ack = next_ack;
+        this.events = events;
         this.ecdh.generateKeys();
         this.handshake_state = HandshakeState.WAIT_SERVER_HELLO;
     }
-
-    public async on_server_hello(frame: Buffer): Promise<void> {
+    async on_server_hello(frame) {
         if (this.handshake_state !== HandshakeState.WAIT_SERVER_HELLO) {
             this.events.onFailure(`CLIENT_HELLO received while in state ${this.handshake_state}`);
             return;
         }
-
         const decoded = CryoFrameFormatter
             .GetFormatter("server_hello")
             .Deserialize(frame);
-
         const server_pub_key = decoded.payload;
-
         //Derive the keys
         const secret = this.ecdh.computeSecret(server_pub_key);
         const hash = createHash("sha256").update(secret).digest();
         this.transmit_key = hash.subarray(16, 32);
         this.receive_key = hash.subarray(0, 16);
-
         const my_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
         const ack = this.next_ack();
-
         const client_hello = this.formatter
             .GetFormatter("client_hello")
             .Serialize(this.sid, ack, my_pub_key);
-
         await this.send_plain(client_hello);
         this.handshake_state = HandshakeState.WAIT_SERVER_DONE;
     }
-
-    public async on_server_handshake_done(frame: Buffer): Promise<void> {
+    async on_server_handshake_done(frame) {
         if (this.handshake_state !== HandshakeState.WAIT_SERVER_DONE) {
             this.events.onFailure(`HANDSHAKE_DONE received while in state ${this.state}`);
             return;
         }
-
         //Client got our SERVER_HELLO and finished on its side
         //Now we'll send our handshake_done frame
         const decoded = CryoFrameFormatter
             .GetFormatter("handshake_done")
             .Deserialize(frame);
-
         const done = CryoFrameFormatter
             .GetFormatter("handshake_done")
             .Serialize(this.sid, decoded.ack, null);
         await this.send_plain(done);
-
-        this.events.onSecure({receive_key: this.receive_key!, transmit_key: this.transmit_key!});
+        this.events.onSecure({ receive_key: this.receive_key, transmit_key: this.transmit_key });
         this.handshake_state = HandshakeState.SECURE;
     }
-
-    public get is_secure(): boolean {
+    get is_secure() {
         return this.handshake_state === HandshakeState.SECURE;
     }
-
-    public get state(): HandshakeState {
+    get state() {
         return this.handshake_state;
     }
 }

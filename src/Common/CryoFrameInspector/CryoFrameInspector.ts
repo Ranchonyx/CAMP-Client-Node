@@ -1,25 +1,36 @@
-import CryoFrameFormatter from "../CryoBinaryMessage/CryoFrameFormatter.js";
+import {BinaryMessageType} from "../Protocol/defs.js";
+import {BufferUtil} from "../Protocol/BufferUtil.js";
 
-const typeToStringMap = {
+const typeToStringMap: Record<BinaryMessageType, string> = {
     0: "ack",
     1: "error",
     2: "ping/pong",
     3: "utf8data",
     4: "binarydata",
-    5: "server_hello",
-    6: "client_hello",
-    7: "handshake_done",
+    5: "transaction_start",
+    6: "transaction_chunk",
+    7: "transaction_finish",
 }
 
 export class CryoFrameInspector {
-    public static Inspect(message: Buffer, encoding: BufferEncoding = "utf8"): string {
-        const sid = CryoFrameFormatter.GetSid(message);
-        const ack = CryoFrameFormatter.GetAck(message);
-        const type = CryoFrameFormatter.GetType(message);
+    public static Inspect(message: Buffer): string {
+        const sid = BufferUtil.GetSid(message);
+        const type = BufferUtil.GetType(message);
         const type_str = typeToStringMap[type] || "unknown";
+        const ack = BufferUtil.GetAck(message);
 
-        const payload = CryoFrameFormatter.GetPayload(message, encoding);
-
-        return `[${sid},${ack},${type_str},[${payload}]]`
+        if (type >= BinaryMessageType.TX_START) {
+            switch (type) {
+                case BinaryMessageType.TX_START:
+                case BinaryMessageType.TX_FINISH:
+                    return `[${sid},${ack},${BufferUtil.Transaction.GetTxId(message)},${type_str}]`;
+                case BinaryMessageType.TX_CHUNK:
+                    return `[${sid},${BufferUtil.Transaction.GetChunkTxId(message)},${type_str},[${BufferUtil.Transaction.GetChunkPayload(message)}]]`;
+            }
+            throw new Error("Unknown type " + type);
+        } else {
+            const payload = BufferUtil.GetPayload(message);
+            return `[${sid},${ack},${type_str},[${payload}]]`;
+        }
     }
 }
