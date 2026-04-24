@@ -5,8 +5,9 @@ import {BufferUtil} from "../BufferUtil.js";
 export class TXFinishFrame {
     public static Deserialize(value: Buffer): TXFinishMessage {
         const sid = BufferUtil.sidFromBuffer(value);
-        const ack = value.readUInt32BE(16);
-        const type = value.readUint8(20);
+        const type = value.readUint8(16);
+        const ack = value.readUInt32BE(20);
+
         const txId = value.readUInt32BE(21);
 
         if (type !== BinaryMessageType.TX_FINISH)
@@ -25,9 +26,9 @@ export class TXFinishFrame {
         const sid_buf = BufferUtil.sidToBuffer(sid);
 
         sid_buf.copy(msg_buf, 0);
-        msg_buf.writeUInt32BE(ack, 16);
-        msg_buf.writeUint8(BinaryMessageType.TX_FINISH, 20);
-        msg_buf.writeUInt32BE(txId, 21);
+        msg_buf.writeUint8(BinaryMessageType.TX_FINISH, 16);
+        msg_buf.writeUInt32BE(ack, 20);
+        msg_buf.writeUInt32BE(txId, 24);
 
         return msg_buf;
     }

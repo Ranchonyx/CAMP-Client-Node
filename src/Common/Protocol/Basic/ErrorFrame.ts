@@ -5,8 +5,8 @@ import {BinaryMessageType, ErrorMessage} from "../defs.js";
 export class ErrorFrame {
     public static Deserialize(value: Buffer): ErrorMessage {
         const sid = BufferUtil.sidFromBuffer(value);
-        const ack = value.readUInt32BE(16);
-        const type = value.readUint8(20);
+        const type = value.readUint8(16);
+        const ack = value.readUInt32BE(17);
         const payload = value.subarray(21).toString("utf8") as ErrorMessage["payload"];
 
         if (type !== BinaryMessageType.ERROR)
@@ -25,8 +25,9 @@ export class ErrorFrame {
         const sid_buf = BufferUtil.sidToBuffer(sid);
 
         sid_buf.copy(msg_buf, 0);
-        msg_buf.writeUInt32BE(ack, 16);
-        msg_buf.writeUint8(BinaryMessageType.ERROR, 20);
+        msg_buf.writeUint8(BinaryMessageType.ERROR, 16);
+        msg_buf.writeUInt32BE(ack, 20);
+
         msg_buf.write(payload || "unknown_error", 21);
 
         return msg_buf;
