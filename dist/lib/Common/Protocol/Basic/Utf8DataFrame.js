@@ -20,7 +20,7 @@ export class Utf8DataFrame {
         const sid_buf = BufferUtil.sidToBuffer(sid);
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUint8(BinaryMessageType.UTF8DATA, 16);
-        msg_buf.writeUInt32BE(ack, 20);
+        msg_buf.writeUInt32BE(ack, 17);
         msg_buf.write(payload || "null", 21);
         return msg_buf;
     }

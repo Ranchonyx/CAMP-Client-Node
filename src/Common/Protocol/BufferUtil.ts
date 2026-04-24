@@ -17,7 +17,7 @@ export class BufferUtil {
     }
 
     public static GetType(message: Buffer): BinaryMessageType {
-        const type = message.readUint8(20);
+        const type = message.readUint8(16);
         if (type > BinaryMessageType.TX_FINISH)
             throw new Error(`Unable to decode type from message ${message}. MAX_TYPE = 7, got ${type} !`);
 
@@ -25,7 +25,7 @@ export class BufferUtil {
     }
 
     public static GetAck(message: Buffer): number {
-        return message.readUint32BE(16);
+        return message.readUint32BE(17);
     }
 
     public static GetSid(message: Buffer): UUID {

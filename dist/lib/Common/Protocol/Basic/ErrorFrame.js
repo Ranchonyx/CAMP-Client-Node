@@ -20,7 +20,7 @@ export class ErrorFrame {
         const sid_buf = BufferUtil.sidToBuffer(sid);
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUint8(BinaryMessageType.ERROR, 16);
-        msg_buf.writeUInt32BE(ack, 20);
+        msg_buf.writeUInt32BE(ack, 17);
         msg_buf.write(payload || "unknown_error", 21);
         return msg_buf;
     }
