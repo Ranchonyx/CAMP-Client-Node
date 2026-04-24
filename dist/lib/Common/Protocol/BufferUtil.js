@@ -12,13 +12,13 @@ export class BufferUtil {
         return Buffer.from(sid.replaceAll("-", ""), 'hex');
     }
     static GetType(message) {
-        const type = message.readUint8(20);
+        const type = message.readUint8(16);
         if (type > BinaryMessageType.TX_FINISH)
             throw new Error(`Unable to decode type from message ${message}. MAX_TYPE = 7, got ${type} !`);
         return type;
     }
     static GetAck(message) {
-        return message.readUint32BE(16);
+        return message.readUint32BE(17);
     }
     static GetSid(message) {
         return BufferUtil.sidFromBuffer(message);
