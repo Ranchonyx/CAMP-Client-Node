@@ -68,6 +68,8 @@ const Fatal = [
 * */
 export class CryoClientWebsocketSession extends EventEmitter implements CryoClientWebsocketSession {
     private server_ack_tracker: AckTracker = new AckTracker();
+    private streams: Map<number, Readable> = new Map();
+
     private current_ack = 0;
     private current_txid = 0;
 
@@ -237,7 +239,18 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         await this.Send(encodedACKMessage);
 
-        this.emit("tx-start", decodedStartFrame.txId);
+        const stream = new Readable({
+            read() {
+            }
+        });
+
+        //Handle stream
+        stream.on("close", () => {
+            this.streams.delete(decodedStartFrame.txId);
+        });
+        this.streams.set(decodedStartFrame.txId, stream);
+
+        this.emit("tx-start", decodedStartFrame.txId, decodedStartFrame.txName);
     }
 
     private async HandleTxFinishMessage(message: Buffer): Promise<void> {
@@ -250,12 +263,22 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         await this.Send(encodedACKMessage);
 
+        //Handle stream
+        if (!this.streams.has(decodedFinishFrame.txId))
+            return;
+        this.streams.get(decodedFinishFrame.txId)!.push(null);
+
         this.emit("tx-finish", decodedFinishFrame.txId);
     }
 
     private async HandleTxChunkMessage(message: Buffer): Promise<void> {
         const decodedChunkFrame = TXChunkFrame
             .Deserialize(message);
+
+        //Handle stream
+        if (!this.streams.has(decodedChunkFrame.txId))
+            return;
+        this.streams.get(decodedChunkFrame.txId)!.push(decodedChunkFrame.payload);
 
         this.emit("tx-chunk", decodedChunkFrame.txId, decodedChunkFrame.payload);
     }
@@ -343,12 +366,12 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         this.Send(formatted_message);
     }
 
-    public async Stream(source: Readable) {
+    public async Stream(source: Readable, streamName: string = "anonymous") {
         return new Promise<void>((resolve, reject) => {
             const new_ack_id = this.inc_get_ack();
             const new_txid = this.inc_get_txid();
 
-            const start_frame = TXStartFrame.Serialize(this.sid, new_ack_id, new_txid);
+            const start_frame = TXStartFrame.Serialize(this.sid, new_ack_id, new_txid, streamName);
             this.Send(start_frame);
 
             source.on("data", (chunk: Buffer) => {
@@ -365,6 +388,41 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
             source.on("error", (err) => {
                 reject(err);
             })
+        });
+    }
+
+    public async WaitForStream(streamName: string = "anonymous", timeout: number = 1000): Promise<Readable> {
+        const timeoutSig = AbortSignal.timeout(timeout);
+
+        return new Promise<Readable>((resolve, reject) => {
+            const onTxStartListener = async (txId: number, txName: string) => {
+                if (txName === streamName) {
+                    if (!this.streams.has(txId)) {
+                        this.off("tx-start", onTxStartListener);
+                        timeoutSig.removeEventListener("abort", onAbort);
+
+                        reject(new Error(`No stream id ${txId} present!`));
+                    }
+
+                    const stream = this.streams.get(txId)!;
+
+                    //Remove this listener once the stream has been read
+                    stream.on("close", () => {
+                        this.off("tx-start", onTxStartListener);
+                    })
+
+                    resolve(stream);
+                }
+            }
+
+            const onAbort = () => {
+                this.off("tx-start", onTxStartListener);
+                timeoutSig.removeEventListener("abort", onAbort);
+                reject(new Error(`Timeout elapsed!`));
+            }
+
+            this.on("tx-start", onTxStartListener);
+            timeoutSig.addEventListener("abort", onAbort);
         });
     }
 

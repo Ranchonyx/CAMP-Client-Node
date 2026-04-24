@@ -18,7 +18,7 @@ export class ACKFrame {
         const sid_buf = BufferUtil.sidToBuffer(sid);
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUint8(BinaryMessageType.ACK, 16);
-        msg_buf.writeUInt32BE(ack, 20);
+        msg_buf.writeUInt32BE(ack, 17);
         return msg_buf;
     }
 }

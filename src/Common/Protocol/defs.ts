@@ -38,6 +38,7 @@ export type BinaryDataMessage = BinaryMessage<{
 export type TXStartMessage = BinaryMessage<{
     ack: number;
     txId: number;
+    txName: string;
 }, BinaryMessageType.TX_START>;
 
 export type TXChunkMessage = BinaryMessage<{

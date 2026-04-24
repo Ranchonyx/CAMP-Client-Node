@@ -27,6 +27,8 @@ export declare class CryoClientWebsocketSession extends EventEmitter implements 
 
     public Stream(source: Readable): Promise<void>;
 
+    public WaitForStream(streamName?: string, timeout?: number): Promise<Readable>;
+
     public Close(): void;
 }
 
