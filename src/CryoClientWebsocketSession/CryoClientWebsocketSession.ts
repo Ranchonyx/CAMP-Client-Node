@@ -75,6 +75,14 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     private constructor(private socket: WebSocket, private connectionHelper: CryoConnectionHelper, private sid: bigint, private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
         this.AttachListenersToSocket(socket);
+
+        //Send the first endpointInfo message
+        const ack = this.inc_get_ack();
+        const msg = EndpointInfoFrame.Serialize(this.sid, ack);
+        this.server_ack_tracker.Track(ack, {timestamp: Date.now(), message: msg});
+
+        this.Send(msg);
+
         setImmediate(() => this.emit("connected"));
     }
 
