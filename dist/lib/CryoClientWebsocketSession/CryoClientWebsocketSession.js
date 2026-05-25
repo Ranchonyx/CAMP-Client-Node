@@ -1,19 +1,10 @@
 import EventEmitter from "node:events";
 import { AckTracker } from "../Common/AckTracker/AckTracker.js";
 import { CryoFrameInspector } from "../Common/CryoFrameInspector/CryoFrameInspector.js";
-import { randomUUID } from "node:crypto";
 import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
 import { CryoConnectionHelper } from "./CryoConnectionHelper.js";
-import { BufferUtil } from "../Common/Protocol/BufferUtil.js";
-import { BinaryMessageType } from "../Common/Protocol/defs.js";
-import { PingPongFrame } from "../Common/Protocol/Basic/PingPongFrame.js";
-import { ErrorFrame } from "../Common/Protocol/Basic/ErrorFrame.js";
-import { ACKFrame } from "../Common/Protocol/Basic/ACKFrame.js";
-import { Utf8DataFrame } from "../Common/Protocol/Basic/Utf8DataFrame.js";
-import { TXStartFrame } from "../Common/Protocol/Transaction/TXStartFrame.js";
-import { TXFinishFrame } from "../Common/Protocol/Transaction/TXFinishFrame.js";
-import { TXChunkFrame } from "../Common/Protocol/Transaction/TXChunkFrame.js";
-import { BinaryDataFrame } from "../Common/Protocol/Basic/BinaryDataFrame.js";
+import { Readable } from "node:stream";
+import { ACKFrame, BinaryDataFrame, BinaryMessageType, BufferUtil, cryoNewId, ErrorFrame, PingPongFrame, TXChunkFrame, TXFinishFrame, TXStartFrame, Utf8DataFrame } from "cryo-protocol";
 var CryoCloseCode;
 (function (CryoCloseCode) {
     CryoCloseCode[CryoCloseCode["CLOSE_GRACEFUL"] = 4000] = "CLOSE_GRACEFUL";
@@ -58,17 +49,18 @@ export class CryoClientWebsocketSession extends EventEmitter {
     socket;
     connectionHelper;
     sid;
-    use_cale;
     log;
     server_ack_tracker = new AckTracker();
+    streams = new Map();
+    bytes_rx = 0;
+    bytes_tx = 0;
     current_ack = 0;
     current_txid = 0;
-    constructor(socket, connectionHelper, sid, use_cale = true, log = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
+    constructor(socket, connectionHelper, sid, log = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
         this.socket = socket;
         this.connectionHelper = connectionHelper;
         this.sid = sid;
-        this.use_cale = use_cale;
         this.log = log;
         this.AttachListenersToSocket(socket);
         setImmediate(() => this.emit("connected"));
@@ -80,14 +72,15 @@ export class CryoClientWebsocketSession extends EventEmitter {
         socket.on("error", this.HandleError.bind(this));
         socket.on("close", this.HandleClose.bind(this));
     }
-    static async Connect(host, bearer, additionalQueryParamsMap, use_cale = true, timeout = 5000, maxPayload = 256 * 1024 * 1024) {
-        const sid = randomUUID();
+    static async Connect(host, bearer, additionalQueryParamsMap, timeout = 5000, maxPayload = 256 * 1024 * 1024) {
+        const sid = cryoNewId();
         const connHelper = new CryoConnectionHelper(host, bearer, sid, timeout, maxPayload, additionalQueryParamsMap);
         const socket = await connHelper.Acquire();
-        return new CryoClientWebsocketSession(socket, connHelper, sid, use_cale);
+        return new CryoClientWebsocketSession(socket, connHelper, sid);
     }
     async routeFrame(frame) {
         const type = BufferUtil.GetType(frame);
+        this.bytes_rx += frame.byteLength;
         switch (type) {
             case BinaryMessageType.PING_PONG:
                 await this.HandlePingPongMessage(frame);
@@ -136,6 +129,8 @@ export class CryoClientWebsocketSession extends EventEmitter {
         this.socket.send(outgoing_message, (maybe_error) => {
             if (maybe_error)
                 this.HandleError(maybe_error).then(r => null);
+            else
+                this.bytes_tx += outgoing_message.byteLength;
         });
         this.log(`Sent ${CryoFrameInspector.Inspect(outgoing_message)} to server.`);
     }
@@ -201,8 +196,17 @@ export class CryoClientWebsocketSession extends EventEmitter {
         const ack_id = decodedStartFrame.ack;
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
-        await this.Send(encodedACKMessage);
-        this.emit("tx-start", decodedStartFrame.txId);
+        this.Send(encodedACKMessage);
+        const stream = new Readable({
+            read() {
+            }
+        });
+        //Handle stream
+        stream.on("close", () => {
+            this.streams.delete(decodedStartFrame.txId);
+        });
+        this.streams.set(decodedStartFrame.txId, stream);
+        this.emit("tx-start", decodedStartFrame.txId, decodedStartFrame.txName);
     }
     async HandleTxFinishMessage(message) {
         const decodedFinishFrame = TXFinishFrame
@@ -210,12 +214,20 @@ export class CryoClientWebsocketSession extends EventEmitter {
         const ack_id = decodedFinishFrame.ack;
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
-        await this.Send(encodedACKMessage);
+        this.Send(encodedACKMessage);
+        //Handle stream
+        if (!this.streams.has(decodedFinishFrame.txId))
+            return;
+        this.streams.get(decodedFinishFrame.txId).push(null);
         this.emit("tx-finish", decodedFinishFrame.txId);
     }
     async HandleTxChunkMessage(message) {
         const decodedChunkFrame = TXChunkFrame
             .Deserialize(message);
+        //Handle stream
+        if (!this.streams.has(decodedChunkFrame.txId))
+            return;
+        this.streams.get(decodedChunkFrame.txId).push(decodedChunkFrame.payload);
         this.emit("tx-chunk", decodedChunkFrame.txId, decodedChunkFrame.payload);
     }
     async HandleError(err) {
@@ -287,18 +299,28 @@ export class CryoClientWebsocketSession extends EventEmitter {
             .Serialize(this.sid, new_ack_id, message);
         this.Send(formatted_message);
     }
-    async Stream(source) {
+    async StreamPush(source, streamName) {
         return new Promise((resolve, reject) => {
-            const new_ack_id = this.inc_get_ack();
+            const start_ack_id = this.inc_get_ack();
             const new_txid = this.inc_get_txid();
-            const start_frame = TXStartFrame.Serialize(this.sid, new_ack_id, new_txid);
+            const start_frame = TXStartFrame.Serialize(this.sid, start_ack_id, new_txid, streamName);
+            this.server_ack_tracker.Track(start_ack_id, {
+                message: start_frame,
+                timestamp: Date.now()
+            });
             this.Send(start_frame);
+            let seq = 0;
             source.on("data", (chunk) => {
-                const chunk_frame = TXChunkFrame.Serialize(this.sid, new_txid, chunk);
+                const chunk_frame = TXChunkFrame.Serialize(this.sid, new_txid, seq++, chunk);
                 this.Send(chunk_frame);
             });
             source.on("end", () => {
-                const finish_frame = TXFinishFrame.Serialize(this.sid, this.inc_get_ack(), new_txid);
+                const finish_ack_id = this.inc_get_ack();
+                const finish_frame = TXFinishFrame.Serialize(this.sid, finish_ack_id, new_txid);
+                this.server_ack_tracker.Track(finish_ack_id, {
+                    message: finish_frame,
+                    timestamp: Date.now()
+                });
                 this.Send(finish_frame);
                 resolve();
             });
@@ -307,11 +329,39 @@ export class CryoClientWebsocketSession extends EventEmitter {
             });
         });
     }
+    async StreamPull(source, streamName) {
+    }
+    async Stream(source, streamName = "anonymous") {
+    }
+    async WaitForStream(streamName = "anonymous", timeout = 1000) {
+        const timeoutSig = AbortSignal.timeout(timeout);
+        return new Promise((resolve, reject) => {
+            const onTxStartListener = async (txId, txName) => {
+                if (txName === streamName) {
+                    if (!this.streams.has(txId)) {
+                        this.off("tx-start", onTxStartListener);
+                        timeoutSig.removeEventListener("abort", onAbort);
+                        reject(new Error(`No stream id ${txId} present!`));
+                    }
+                    const stream = this.streams.get(txId);
+                    //Remove this listener once the stream has been read
+                    stream.on("close", () => {
+                        this.off("tx-start", onTxStartListener);
+                    });
+                    resolve(stream);
+                }
+            };
+            const onAbort = () => {
+                this.off("tx-start", onTxStartListener);
+                timeoutSig.removeEventListener("abort", onAbort);
+                reject(new Error(`Timeout elapsed!`));
+            };
+            this.on("tx-start", onTxStartListener);
+            timeoutSig.addEventListener("abort", onAbort);
+        });
+    }
     Close() {
         this.Destroy(CryoCloseCode.CLOSE_GRACEFUL, "Client finished.");
-    }
-    get session_id() {
-        return this.sid;
     }
     inc_get_txid() {
         if (this.current_txid + 1 > 0xffffffff)
@@ -326,5 +376,29 @@ export class CryoClientWebsocketSession extends EventEmitter {
     Destroy(code = 1000, message = "") {
         this.log(`Teardown of session. Code=${code}, reason=${message}`);
         this.socket.close(code, message);
+    }
+    /**
+     * Getter for the internal cryo session id
+     * */
+    get session_id() {
+        return this.sid;
+    }
+    /**
+     * Retrieve ewma RTT
+     * */
+    get rtt() {
+        return this.server_ack_tracker.rtt;
+    }
+    /**
+     * Retrieve bytes transmitted
+     * */
+    get tx() {
+        return this.bytes_tx;
+    }
+    /**
+     * Retrieve bytes received
+     * */
+    get rx() {
+        return this.bytes_rx;
     }
 }

@@ -1,30 +1,9 @@
-# Cryo-Client-Node
+# Cryo
 
-#### Part of the Cryo Ecosystem
+Cryo is a small binary protocol for sending arbitrary messages, large data and real-time information over WebSocket.
+It uses fixed frame types for acknowledgements, heartbeats, UTF-8 text, binary payloads and streamed transactions.
 
-```
- █████ ██████  ██   ██  █████  
-██     ██   ██  ██ ██  ██   ██ 
-██     ██████    ███   ██   ██ 
-██     ██ ██     ██    ██   ██ 
-██     ██  ██    ██    ██   ██ 
- █████ ██   ██   ██     █████  
-                Node.js client implementation
-```
-
----
-
-## Cryo / Overview
-
-Cryo is a lightweight, efficient Websocket framework intended for building real-time systems
-
-Client implementations are available for:
-
-- **TypeScript / JavaScript** under **Node.Js**
-- **TypeScript / JavaScript** under **modern Browsers**
-- **C#** under **.NET 8.0**
-
-A server implementation is available for **TypeScript / JavaScript** under **Node.Js**
+This is an implementation of the Cryo protocol specified at [Cryo-Protocol](https://github.com/Ranchonyx/Cryo-Protocol)
 
 ## Cryo-Client-Node / Overview
 
@@ -38,16 +17,14 @@ It provides access incoming communication via events
 
 ## Setup
 
-To set up a Cryo Client, simply import the ``cryo`` function from the ``cryo-client-node`` package.
+To set up a Cryo Client, simply import the `cryo` function from the ``cryo-client-node`` package.
 
-The ``cryo``-function takes two arguments:
+The `cryo`-function takes two arguments:
 
 - host
     - a required host string
 - bearer
     - a required authentication token string
-- use_cale
-    - If the client should use ``CALE``, see [CALE](#cale---cryo-application-level-encryption)
 - timeout
     - an optional timeout value, indicating how long the client should wait until a connection request to the server is
       aborted
@@ -56,10 +33,15 @@ The ``cryo``-function takes two arguments:
 
 ### Public methods
 
-| Name    | Parameter                       | Description                                | Returns |
-|---------|---------------------------------|--------------------------------------------|---------|
-| Close   |                                 | Closes the underlying Websocket connection |         |
-| Destroy | code?: number, message?: string | Tears down the session                     |         |
+| Name                   | Parameter                              | Description                                | Returns           |
+|------------------------|----------------------------------------|--------------------------------------------|-------------------|
+| SendUTF8               | message: string                        | Streams a Readable to the server           |                   |
+| SendBinary             | message: Buffer                        | Streams a Readable to the server           |                   |
+| Stream                 | source: Readable, name?: string        | Streams a Readable to the server           |                   |
+| WaitForStream          | streamName?: string , timeout?: number | Waits for a named stream                   | Promise<Readable> |
+| SetIncomingFlowControl | behaviour: TX_PULL \| TX_PUSH          | Sets the remote flow control               |                   |   
+| Close                  |                                        | Closes the underlying Websocket connection |                   |
+| Destroy                | code?: number, message?: string        | Tears down the session                     |                   |
 
 ### Data Events
 
@@ -81,7 +63,7 @@ This category of events is emitted when the session state changes
 | reconnected  |                              | Emitted, when the session has reconnected       |
 | closed       | code: number, reason: string | Emitted, when the session is closed             |
 
-## Cryo-Client / Example
+## Cryo-Client-Node / Example
 
 ```typescript
 import {cryo} from "cryo-client-node";
@@ -94,66 +76,3 @@ client.on("connected", () => {
     console.info(`Successfully connected to ${HOST}`);
 });
 ```
-
-## CALE - Cryo application level encryption
-
-Warning - This feature is unavailable in the C# client
-
-**CALE** is an optional, end-to-end encryption layer for Cryo.
-
-It adds a layer of cryptographic protection on top of WebSockets/TCP, mainly for environments without TLS or custom
-setups
-
-**How:**
-
-- It uses **ECDH / P-256** for an ephemeral key exchange
-- Derives symmetric session keys using **SHA-256**
-- Encrypts frames using **AES-128-GCM**
-- Performs a 3-step handshake ``server_hello -> client_hello -> handshake_done``
-- Once completed, all frames are encrypted
-
-```` 
-+-------------+                                      +-------------+
-|   Client    |                                      |   Server    |
-+------+------+                                      +------+------+
-       |                                                    |
-       | 1) server_hello(pub_key_s, sid, ack)               |
-       | <------------------------------------------------- |
-       |                                                    |
-       | 2) client_hello(pub_key_c, sid, ack)               |
-       | -------------------------------------------------> |
-       |                                                    |
-       | 3) handshake_done                                  |
-       | <------------------------------------------------- |
-       |                                                    |
-       | 4) handshake_done (ack)                            |
-       | -------------------------------------------------> |
-       |                                                    |
-+------+------ +                                      +------+------+
-| Secure Chan. | <---------- AES-128-GCM ------------>| Secure Chan.|
-|  (tx/rx)     |                                      |  (tx/rx)    |
-+--------------+                                      +-------------+
-
-````
-
-Session keys are derived as such
-
-```
-secret  = ECDH(pub_key_server, priv_key_client)
-hash    = SHA256(secret)
-rx_key  = hash[0..15]
-tx_key  = hash[16..31]
-```
-
-After the ``handshake_done``-step, both peers switch into secure mode, meaning that all data frames (`utf8data`,
-`binarydata`) will be encrypted using AES-GCM
-
-**Why:**
-
-CALE is not meant to replace TLS, I wouldn't dare.
-
-It is a protocol-level experiment for extra application-layer encryption, primarily for private deployments or custom
-setups.
-
-If you are communicating via TLS, you do **not** need **CALE** at all and it is recommended to disable it for
-performance reasons.

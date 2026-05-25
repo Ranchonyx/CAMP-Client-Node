@@ -1,5 +1,6 @@
 import {EventEmitter} from "node:events";
 import {Readable} from "node:stream";
+import {CRYO_FLOW_BEHAVIOUR} from "cryo-protocol";
 
 export interface ICryoClientWebsocketSessionEvents {
     "message-utf8": (message: string) => void;
@@ -29,7 +30,17 @@ export declare class CryoClientWebsocketSession extends EventEmitter implements 
 
     public WaitForStream(streamName?: string, timeout?: number): Promise<Readable>;
 
+    public SetIncomingFlowControl(behaviour: CRYO_FLOW_BEHAVIOUR): Promise<void>;
+
     public Close(): void;
+
+    public get session_id(): string;
+
+    public get rtt(): number;
+
+    public get tx(): number;
+
+    public get rx(): number;
 }
 
 /**

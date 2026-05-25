@@ -9,6 +9,7 @@ export interface ICryoClientWebsocketSessionEvents {
     "tx-start": (txId: number, txName: string) => Promise<void>;
     "tx-chunk": (txId: number, data: Buffer) => Promise<void>;
     "tx-finish": (txId: number) => Promise<void>;
+    "tx-fetch": (txId: number, start: number, end: number) => Promise<void>;
 }
 
 export type PendingBinaryMessage = {

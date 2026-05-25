@@ -14,11 +14,10 @@ export class CryoConnectionHelper {
         this.log = log;
         this.url = new URL(host);
         this.url.searchParams.set("authorization", `Bearer ${bearer}`);
-        this.url.searchParams.set("x-cryo-sid", sid);
+        this.url.searchParams.set("x-cryo-sid", String(sid));
         for (const [key, value] of Object.entries(this.additionalQueryParamsMap)) {
             this.url.searchParams.set(key, value);
         }
-        ;
     }
     async ConnectSocket() {
         return new Promise((resolve, reject) => {

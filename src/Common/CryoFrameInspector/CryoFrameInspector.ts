@@ -1,15 +1,18 @@
-import {BinaryMessageType} from "../Protocol/defs.js";
-import {BufferUtil} from "../Protocol/BufferUtil.js";
+import {BinaryMessageType, BufferUtil} from "cryo-protocol";
 
 const typeToStringMap: Record<BinaryMessageType, string> = {
-    0: "ack",
-    1: "error",
-    2: "ping/pong",
-    3: "utf8data",
-    4: "binarydata",
-    5: "transaction_start",
-    6: "transaction_chunk",
-    7: "transaction_finish",
+    255: "endpoint_info",
+    254: "bye",
+    253: "ack",
+    252: "error",
+    251: "ping/pong",
+    250: "utf8data",
+    249: "binarydata",
+    0: "transaction_start",
+    1: "transaction_chunk",
+    2: "transaction_finish",
+    3: "transaction_flow",
+    4: "transaction_chunk_request",
 }
 
 export class CryoFrameInspector {
@@ -19,18 +22,22 @@ export class CryoFrameInspector {
         const type_str = typeToStringMap[type] || "unknown";
         const ack = BufferUtil.GetAck(message);
 
-        if (type >= BinaryMessageType.TX_START) {
+        //For Cryo.Transaction
+        if (type >= BinaryMessageType.TX_START && type <= BinaryMessageType.TX_FLOW) {
             switch (type) {
                 case BinaryMessageType.TX_START:
+                    return `[type=${type_str}, sid=${sid},ack=${ack},txid=${BufferUtil.Transaction.GetTxId(message)},name=${BufferUtil.Transaction.GetTxName(message)}]`;
                 case BinaryMessageType.TX_FINISH:
-                    return `[${sid},${ack},${BufferUtil.Transaction.GetTxId(message)},${type_str}]`;
+                    return `[type=${type_str}, sid=${sid},ack=${ack},txid=${BufferUtil.Transaction.GetTxId(message)}]`;
                 case BinaryMessageType.TX_CHUNK:
-                    return `[${sid},${BufferUtil.Transaction.GetChunkTxId(message)},${type_str},[${BufferUtil.Transaction.GetChunkPayload(message)}]]`;
+                    return `[type=${type_str}, sid=${sid},txid=${BufferUtil.Transaction.GetChunkTxId(message)},payload[0..15]=${BufferUtil.Transaction.GetChunkPayload(message, "hex").substring(0, 0xf)}]`;
+                case BinaryMessageType.TX_FLOW:
+                    return `[type=${type_str}, sid=${sid},ack=${ack},behaviour=${message.readUint8(10) === 0 ? "PUSH" : "PULL"}]`;
             }
             throw new Error("Unknown type " + type);
         } else {
-            const payload = BufferUtil.GetPayload(message);
-            return `[${sid},${ack},${type_str},[${payload}]]`;
+            const payload = BufferUtil.GetPayload(message, "hex").substring(0, 0xf);
+            return `[type=${type_str}, sid=${sid},ack=${ack},payload[0..15]=${payload}]`;
         }
     }
 }

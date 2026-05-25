@@ -6,6 +6,8 @@ type PendingBinaryMessage = {
 
 export class AckTracker {
     private pending = new Map<number, PendingBinaryMessage>();
+    private ewma_rtt: number | null = null;
+    private alpha = 0.2;
 
     public Track(ack: number, message: PendingBinaryMessage) {
         this.pending.set(ack, message);
@@ -16,7 +18,21 @@ export class AckTracker {
         if (!maybe_ack)
             return null;
 
+        const rtt = Date.now() - maybe_ack.timestamp;
+        if (!this.ewma_rtt)
+            this.ewma_rtt = rtt;
+        else
+            this.ewma_rtt = (1 - this.alpha) * this.ewma_rtt + this.alpha * rtt;
+
         this.pending.delete(ack);
         return maybe_ack;
+    }
+
+    public Has(ack: number): boolean {
+        return this.pending.has(ack);
+    }
+
+    public get rtt(): number {
+        return this.ewma_rtt || -1;
     }
 }

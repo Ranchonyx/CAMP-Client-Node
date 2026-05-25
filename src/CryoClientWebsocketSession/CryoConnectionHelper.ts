@@ -9,7 +9,7 @@ export class CryoConnectionHelper {
     public constructor(
         host: string,
         bearer: string,
-        sid: string,
+        sid: bigint,
         private connectionTimeout: number,
         private maxPayload = 256 * 1024 * 1024,
         private additionalQueryParamsMap: Record<string, string>,
@@ -17,11 +17,11 @@ export class CryoConnectionHelper {
 
         this.url = new URL(host);
         this.url.searchParams.set("authorization", `Bearer ${bearer}`);
-        this.url.searchParams.set("x-cryo-sid", sid);
+        this.url.searchParams.set("x-cryo-sid", String(sid));
 
         for (const [key, value] of Object.entries(this.additionalQueryParamsMap)) {
             this.url.searchParams.set(key, value);
-        };
+        }
 
     }
 
