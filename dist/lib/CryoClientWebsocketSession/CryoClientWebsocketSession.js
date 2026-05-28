@@ -2,6 +2,7 @@ import EventEmitter from "node:events";
 import { AckTracker } from "../Common/AckTracker/AckTracker.js";
 import { CryoFrameInspector } from "../Common/CryoFrameInspector/CryoFrameInspector.js";
 import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
+import WebSocket from "ws";
 import { CryoConnectionHelper } from "./CryoConnectionHelper.js";
 import { Readable } from "node:stream";
 import { ACKFrame, BinaryDataFrame, BinaryMessageType, BufferUtil, ByeFrame, CRYO_FLOW_BEHAVIOUR, CRYO_PROTOCOL_VERSION, cryoNewId, EndpointInfoFrame, ErrorFrame, PingPongFrame, TXChunkFrame, TXFetchFrame, TXFinishFrame, TXFlowFrame, TXStartFrame, Utf8DataFrame } from "cryo-protocol";
@@ -50,6 +51,11 @@ export class CryoClientWebsocketSession extends EventEmitter {
         this.sid = sid;
         this.log = log;
         this.AttachListenersToSocket(socket);
+        //Send the first endpointInfo message
+        const ack = this.inc_get_ack();
+        const msg = EndpointInfoFrame.Serialize(this.sid, ack);
+        this.server_ack_tracker.Track(ack, { timestamp: Date.now(), message: msg });
+        this.Send(msg);
         setImmediate(() => this.emit("connected"));
     }
     AttachListenersToSocket(socket) {
@@ -121,19 +127,40 @@ export class CryoClientWebsocketSession extends EventEmitter {
     /*
     * Handle an outgoing binary message
     * */
-    Send(outgoing_message) {
+    async Send(outgoing_message) {
+        const immediateResolver = () => {
+            const p = Promise.withResolvers();
+            setImmediate(() => p.resolve(undefined));
+            return p.promise;
+        };
+        const immediateReject = () => {
+            const p = Promise.withResolvers();
+            setImmediate(() => p.reject("Invalid socket state!"));
+            return p.promise;
+        };
+        let ackPromise = null;
+        if (!this.socket)
+            return immediateReject();
+        if (this.socket.readyState === WebSocket.CLOSING || this.socket.readyState === WebSocket.CLOSED)
+            return immediateReject();
         //Create a pending message with a new ack number and queue it for acknowledgement by the server
         const type = BufferUtil.GetType(outgoing_message);
-        if (type === BinaryMessageType.UTF8DATA || type === BinaryMessageType.BINARYDATA) {
+        if (type === BinaryMessageType.UTF8DATA ||
+            type === BinaryMessageType.BINARYDATA ||
+            type === BinaryMessageType.ERROR ||
+            type === BinaryMessageType.ENDPOINT_INFO ||
+            type === BinaryMessageType.TX_FLOW ||
+            type === BinaryMessageType.TX_START ||
+            type === BinaryMessageType.TX_FINISH ||
+            type === BinaryMessageType.TX_FETCH) {
             const message_ack = BufferUtil.GetAck(outgoing_message);
+            ackPromise = Promise.withResolvers();
             this.server_ack_tracker.Track(message_ack, {
                 timestamp: Date.now(),
-                message: outgoing_message
+                message: outgoing_message,
+                ackPromise
             });
         }
-        //Send the message buffer to the server
-        if (!this.socket)
-            return;
         this.socket.send(outgoing_message, (maybe_error) => {
             if (maybe_error)
                 this.HandleError(maybe_error).then(r => null);
@@ -141,6 +168,9 @@ export class CryoClientWebsocketSession extends EventEmitter {
                 this.bytes_tx += outgoing_message.byteLength;
         });
         this.log(`Sent ${CryoFrameInspector.Inspect(outgoing_message)} to server.`);
+        if (ackPromise)
+            return ackPromise.promise;
+        return immediateResolver();
     }
     /*
     * Respond to PONG frames with PING and vice versa
@@ -158,6 +188,12 @@ export class CryoClientWebsocketSession extends EventEmitter {
     async HandleErrorMessage(message) {
         const decodedErrorMessage = ErrorFrame
             .Deserialize(message);
+        const ack_id = decodedErrorMessage.ack;
+        const found_message = this.server_ack_tracker.Confirm(ack_id);
+        if (!found_message) {
+            this.log(`Got unknown ack_id ${ack_id} from server.`);
+            return;
+        }
         this.log(decodedErrorMessage.payload);
     }
     /*
@@ -172,6 +208,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
             this.log(`Got unknown ack_id ${ack_id} from server.`);
             return;
         }
+        found_message.ackPromise?.resolve();
         this.log(`Got ACK ${ack_id} from server.`);
     }
     /*

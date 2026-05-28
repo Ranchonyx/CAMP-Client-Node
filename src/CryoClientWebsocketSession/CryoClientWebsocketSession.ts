@@ -162,20 +162,35 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     /*
     * Handle an outgoing binary message
     * */
-    private Send(outgoing_message: Buffer): void {
+    private async Send(outgoing_message: Buffer): Promise<void> {
+        let ackPromise: PromiseWithResolvers<void> | null = null;
+
+        if (!this.socket)
+            return Promise.reject("No socket.");
+
+        if (this.socket.readyState === WebSocket.CLOSING || this.socket.readyState === WebSocket.CLOSED)
+            return Promise.reject("Invalid socket state.");
+
         //Create a pending message with a new ack number and queue it for acknowledgement by the server
         const type = BufferUtil.GetType(outgoing_message);
-        if (type === BinaryMessageType.UTF8DATA || type === BinaryMessageType.BINARYDATA) {
+        if (
+            type === BinaryMessageType.UTF8DATA ||
+            type === BinaryMessageType.BINARYDATA ||
+            type === BinaryMessageType.ERROR ||
+            type === BinaryMessageType.ENDPOINT_INFO ||
+            type === BinaryMessageType.TX_FLOW ||
+            type === BinaryMessageType.TX_START ||
+            type === BinaryMessageType.TX_FINISH ||
+            type === BinaryMessageType.TX_FETCH
+        ) {
             const message_ack = BufferUtil.GetAck(outgoing_message);
+            ackPromise = Promise.withResolvers<void>();
             this.server_ack_tracker.Track(message_ack, {
                 timestamp: Date.now(),
-                message: outgoing_message
+                message: outgoing_message,
+                ackPromise
             });
         }
-
-        //Send the message buffer to the server
-        if (!this.socket)
-            return;
 
         this.socket.send(outgoing_message, (maybe_error) => {
             if (maybe_error)
@@ -185,6 +200,9 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         });
 
         this.log(`Sent ${CryoFrameInspector.Inspect(outgoing_message)} to server.`);
+        if (!ackPromise)
+            return Promise.resolve();
+        return ackPromise.promise;
     }
 
     /*
@@ -207,6 +225,17 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const decodedErrorMessage = ErrorFrame
             .Deserialize(message);
 
+        const ack_id = decodedErrorMessage.ack;
+
+        const found_message = this.server_ack_tracker.Confirm(ack_id);
+
+        if (!found_message) {
+            this.log(`Got unknown ack_id ${ack_id} from server.`);
+            return;
+        }
+
+        found_message.ackPromise?.reject(decodedErrorMessage.payload);
+
         this.log(decodedErrorMessage.payload);
     }
 
@@ -225,6 +254,8 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
             return;
         }
 
+        found_message.ackPromise?.resolve();
+
         this.log(`Got ACK ${ack_id} from server.`);
     }
 
@@ -240,7 +271,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedAckMessage = ACKFrame
             .Serialize(this.sid, decodedDataMessage.ack);
 
-        this.Send(encodedAckMessage);
+        await this.Send(encodedAckMessage);
         this.emit("message-utf8", payload);
     }
 
@@ -256,7 +287,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedAckMessage = ACKFrame
             .Serialize(this.sid, decodedDataMessage.ack);
 
-        this.Send(encodedAckMessage);
+        await this.Send(encodedAckMessage);
         this.emit("message-binary", payload);
     }
 
@@ -268,7 +299,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
 
-        this.Send(encodedACKMessage);
+        await this.Send(encodedACKMessage);
 
         const stream = new Readable({
             read() {
@@ -292,7 +323,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
 
-        this.Send(encodedACKMessage);
+        await this.Send(encodedACKMessage);
 
         //Handle stream
         if (!this.streams.has(decodedFinishFrame.txId))
@@ -322,7 +353,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
 
-        this.Send(encodedACKMessage);
+        await this.Send(encodedACKMessage);
 
         this.Destroy(4000, decodedByeMessage.reason);
     }
@@ -335,7 +366,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
 
-        this.Send(encodedACKMessage);
+        await this.Send(encodedACKMessage);
 
         //Check protocol version equality and fail otherwise
         if (CRYO_PROTOCOL_VERSION !== decodedInfoMessage.version) {
@@ -356,7 +387,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
 
-        this.Send(encodedACKMessage);
+        await this.Send(encodedACKMessage);
 
         this.outgoingFlowControl = decodedFlowFrame.behaviour;
     }
@@ -369,7 +400,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const encodedACKMessage = ACKFrame
             .Serialize(this.sid, ack_id);
 
-        this.Send(encodedACKMessage);
+        await this.Send(encodedACKMessage);
 
         this.emit("tx-fetch", decodedFetchFrame.txId, decodedFetchFrame.start, decodedFetchFrame.end);
     }
@@ -436,30 +467,29 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     /*
     * Send an utf8 message to the server
     * */
-    public SendUTF8(message: string): void {
+    public async SendUTF8(message: string): Promise<void> {
         const new_ack_id = this.inc_get_ack();
 
         const formatted_message = Utf8DataFrame
             .Serialize(this.sid, new_ack_id, message);
 
-        this.Send(formatted_message);
+        await this.Send(formatted_message);
     }
 
     /*
     * Send a binary message to the server
     * */
-    public SendBinary(message: Buffer): void {
+    public async SendBinary(message: Buffer): Promise<void> {
         const new_ack_id = this.inc_get_ack();
 
         const formatted_message = BinaryDataFrame
             .Serialize(this.sid, new_ack_id, message);
 
-        this.Send(formatted_message);
+        await this.Send(formatted_message);
     }
 
     private async StreamPush(source: Readable, streamName: string): Promise<void> {
-
-        return new Promise<void>((resolve, reject) => {
+        return new Promise<void>(async (resolve, reject) => {
             const start_ack_id = this.inc_get_ack();
             const new_txid = this.inc_get_txid();
 
@@ -468,7 +498,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                 message: start_frame,
                 timestamp: Date.now()
             });
-            this.Send(start_frame);
+            await this.Send(start_frame);
 
             let seq = 0;
             source.on("data", (chunk: Buffer) => {
@@ -510,7 +540,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                 message: start_frame,
                 timestamp: Date.now()
             });
-            this.Send(start_frame);
+            await this.Send(start_frame);
 
             let seq = 0;
             const fetchHandler = async (txId: number, start: number, end: number) => {
@@ -530,7 +560,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                         timestamp: Date.now()
                     });
 
-                    this.Send(finish_frame);
+                    await this.Send(finish_frame);
                     this.removeListener("tx-fetch", fetchHandler);
                 }
             }
@@ -590,7 +620,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
             timestamp: Date.now()
         });
 
-        this.Send(flow_frame);
+        await this.Send(flow_frame);
     }
 
     public Close(): void {

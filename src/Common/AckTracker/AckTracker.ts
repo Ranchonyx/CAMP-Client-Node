@@ -2,6 +2,7 @@ type PendingBinaryMessage = {
     timestamp: number;
     message: Buffer;
     payload?: string | Buffer;
+    ackPromise?: PromiseWithResolvers<void>;
 }
 
 export class AckTracker {
