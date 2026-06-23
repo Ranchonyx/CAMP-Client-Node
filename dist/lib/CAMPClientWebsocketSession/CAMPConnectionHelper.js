@@ -7,14 +7,14 @@ export class CAMPConnectionHelper {
     log;
     socket = null;
     url;
-    constructor(host, bearer, sid, connectionTimeout, maxPayload = 256 * 1024 * 1024, additionalQueryParamsMap, log = CreateDebugLogger("CRYO_CONNECTION_HELPER")) {
+    constructor(host, bearer, sid, connectionTimeout, maxPayload = 256 * 1024 * 1024, additionalQueryParamsMap, log = CreateDebugLogger("CAMP_CONNECTION_HELPER")) {
         this.connectionTimeout = connectionTimeout;
         this.maxPayload = maxPayload;
         this.additionalQueryParamsMap = additionalQueryParamsMap;
         this.log = log;
         this.url = new URL(host);
         this.url.searchParams.set("authorization", `Bearer ${bearer}`);
-        this.url.searchParams.set("x-cryo-sid", String(sid));
+        this.url.searchParams.set("x-CAMP-sid", String(sid));
         for (const [key, value] of Object.entries(this.additionalQueryParamsMap)) {
             this.url.searchParams.set(key, value);
         }
