@@ -60,6 +60,7 @@ Accessible via ``session.transaction.<method>(...);``
 | Stream             | source: Readable, options: { streamName: string, behaviour: CAMP_FLOW_BEHAVIOUR } | Streams a readable to the client                            |                         |
 | WaitForStream      | name: string, timeout: number                                                     | Waits for a named stream from client                        | Promise\<CAMPReadable\> |
 | StreamRequestRange | stream: CAMPReadable, start: bigint, end: bigint                                  | When in TX_PULL-mode, requests a byte range from the client |                         |
+| StreamCancel       | stream: CAMPReadable                                                              | Cancels a Stream                                            |                         |
 
 ### Data Events
 
