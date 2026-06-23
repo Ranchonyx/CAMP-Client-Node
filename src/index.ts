@@ -8,6 +8,6 @@ import {CAMPClientWebsocketSession} from "./CAMPClientWebsocketSession/CAMPClien
  * @param additionalQueryParamsMap - A record of additional parameters to be appended to the query string in the upgrade request
  * @param maxPayloadReceived - The maximum size of receivable payloads in bytes
  * */
-export async function camp(host: string, bearer: string, timeout: number = 5000, additionalQueryParamsMap: Record<string, string>, maxPayloadReceived = 256 * 1024 * 1024) {
+export async function camp(host: string, bearer: string, timeout: number = 5000, additionalQueryParamsMap: Record<string, string> = {}, maxPayloadReceived = 256 * 1024 * 1024) {
     return CAMPClientWebsocketSession.Connect(host, bearer, additionalQueryParamsMap, timeout, maxPayloadReceived)
 }

@@ -99,4 +99,4 @@ export declare class CAMPClientWebsocketSession extends EventEmitter implements 
  * @param additionalQueryParamsMap - A record of additional parameters to be appended to the query string in the upgrade request
  * @param maxPayloadReceived - The maximum size of receivable payloads in bytes
  * */
-export async function camp(host: string, bearer: string, timeout: number = 5000, additionalQueryParamsMap: Record<string, string>, maxPayloadReceived = 256 * 1024 * 1024): Promise<CAMPClientWebsocketSession>;
+export async function camp(host: string, bearer: string, timeout: number = 5000, additionalQueryParamsMap: Record<string, string> = {}, maxPayloadReceived = 256 * 1024 * 1024): Promise<CAMPClientWebsocketSession>;
