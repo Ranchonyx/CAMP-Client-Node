@@ -2,6 +2,7 @@ import {EventEmitter} from "node:events";
 import {Readable} from "node:stream";
 import {CRYO_FLOW_BEHAVIOUR} from "cryo-protocol";
 import {TXCancelFrame} from "camp-protocol";
+type CAMPReadable = Readable & { txId: number };
 
 export interface ICAMPClientWebsocketSessionEvents {
     "message-utf8": (message: string) => void;
