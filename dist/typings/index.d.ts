@@ -3,7 +3,7 @@ import {Readable} from "node:stream";
 import {CRYO_FLOW_BEHAVIOUR} from "cryo-protocol";
 import {TXCancelFrame} from "camp-protocol";
 
-export interface ICryoClientWebsocketSessionEvents {
+export interface ICAMPClientWebsocketSessionEvents {
     "message-utf8": (message: string) => void;
     "message-binary": (message: Buffer) => void;
     "message-error": (message: Buffer) => void;
@@ -71,13 +71,13 @@ export declare class CAMPTransactionManager {
     public async StreamCancel(stream: CAMPReadable): Promise<void>;
 }
 
-export interface CryoClientWebsocketSession {
-    on<U extends keyof ICryoClientWebsocketSessionEvents>(event: U, listener: ICryoClientWebsocketSessionEvents[U]): this;
+export interface CAMPClientWebsocketSession {
+    on<U extends keyof ICAMPClientWebsocketSessionEvents>(event: U, listener: ICAMPClientWebsocketSessionEvents[U]): this;
 
-    emit<U extends keyof ICryoClientWebsocketSessionEvents>(event: U, ...args: Parameters<ICryoClientWebsocketSessionEvents[U]>): boolean;
+    emit<U extends keyof ICAMPClientWebsocketSessionEvents>(event: U, ...args: Parameters<ICAMPClientWebsocketSessionEvents[U]>): boolean;
 }
 
-export declare class CryoClientWebsocketSession extends EventEmitter implements CryoClientWebsocketSession {
+export declare class CAMPClientWebsocketSession extends EventEmitter implements CAMPClientWebsocketSession {
     public base: CAMPBaseManager;
     public stream: CAMPTransactionManager;
 
@@ -90,12 +90,13 @@ export declare class CryoClientWebsocketSession extends EventEmitter implements 
     public get rx(): number;
 }
 
+
 /**
- * Create a Cryo server and attach it to an Express.js app
+ * Create a CAMP client
  * @param host - The host to connect to
  * @param bearer - The bearer token to authenticate with at the server
- * @param additionalQueryParamsMap - A record of additional parameters to be appended to the query string in the Upgrade request
  * @param timeout - How long to wait until disconnecting
+ * @param additionalQueryParamsMap - A record of additional parameters to be appended to the query string in the upgrade request
  * @param maxPayloadReceived - The maximum size of receivable payloads in bytes
- **/
-async function cryo(host: string, bearer: string, additionalQueryParamsMap: Record<string, string>, timeout: number = 5000, maxPayloadReceived = 256 * 1024 * 1024): Promise<CryoClientWebsocketSession>;
+ * */
+export async function camp(host: string, bearer: string, timeout: number = 5000, additionalQueryParamsMap: Record<string, string>, maxPayloadReceived = 256 * 1024 * 1024): Promise<CAMPClientWebsocketSession>;
