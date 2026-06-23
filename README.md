@@ -18,7 +18,7 @@ It provides access incoming communication via events
 
 ## Setup
 
-To set up a CAMP Client, simply import the `CAMP` function from the ``CAMP-client-browser`` package.
+To set up a CAMP Client, simply import the `camp` function from the ``camp-client-node`` package.
 
 The `CAMP`-function takes two arguments:
 
@@ -85,7 +85,7 @@ This category of events is emitted when the session state changes
 ## CAMP-Client / Example
 
 ```typescript
-import {CAMP} from "CAMP-client-browser";
+import {CAMP} from "camp-client-node";
 
 const HOST = "localhost:8080";
 const TOKEN = "SOME_AUTH_TOKEN";

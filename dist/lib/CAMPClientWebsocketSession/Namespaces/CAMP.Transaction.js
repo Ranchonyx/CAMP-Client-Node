@@ -8,6 +8,7 @@ import { createWriteStream } from "node:fs";
 import { finished } from "node:stream/promises";
 import Guard from "../../Common/Util/Guard.js";
 import { on } from "node:events";
+import { CAMPReadable } from "../../Common/Wrappers/CAMPReadable.js";
 export class CAMPTransactionManager extends EventEmitter {
     sid;
     send;
@@ -103,7 +104,7 @@ export class CAMPTransactionManager extends EventEmitter {
             let offset = 0n;
             for await (const chunk of source) {
                 signal.throwIfAborted();
-                const chunk_frame = TXChunkFrame.Serialize(this.sid, new_txid, offset++, chunk);
+                const chunk_frame = TXChunkFrame.Serialize(this.sid, new_txid, offset, chunk);
                 await this.send(chunk_frame);
                 offset += BigInt(chunk.byteLength);
             }
@@ -236,16 +237,12 @@ export class CAMPTransactionManager extends EventEmitter {
             return;
         const decodedStartFrame = TXStartFrame
             .Deserialize(frame);
-        const stream = new Readable({
-            read() {
-            }
-        });
-        const { txId, txName } = decodedStartFrame;
+        const { txId, txName, byteLength, behaviour } = decodedStartFrame;
+        const stream = new CAMPReadable(txId, byteLength, behaviour);
         //Handle stream
         stream.on("close", () => {
             this.incomingStreams.delete(txId);
         });
-        Object.defineProperty(stream, "txId", { value: txId });
         this.incomingStreams.set(txId, stream);
         await this.acknowledge(decodedStartFrame.ack);
         this.emit("tx-start", txId, txName);
@@ -270,7 +267,7 @@ export class CAMPTransactionManager extends EventEmitter {
         //Handle stream
         if (!this.incomingStreams.has(txId))
             return;
-        this.incomingStreams.get(txId).push(null);
+        this.incomingStreams.get(txId).finish();
         await this.acknowledge(decodedFinishFrame.ack);
         this.emit("tx-finish", txId);
     }
@@ -290,7 +287,7 @@ export class CAMPTransactionManager extends EventEmitter {
         const { payload, txId } = decodedChunkFrame;
         if (!this.incomingStreams.has(txId))
             return;
-        this.incomingStreams.get(txId).push(payload);
+        this.incomingStreams.get(txId).pushChunk(payload);
         this.emit("tx-chunk", txId, payload);
     }
     async acknowledge(ack_id) {
