@@ -13,11 +13,11 @@ export class CAMPConnectionHelper {
         private connectionTimeout: number,
         private maxPayload = 256 * 1024 * 1024,
         private additionalQueryParamsMap: Record<string, string>,
-        private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CONNECTION_HELPER")) {
+        private log: DebugLoggerFunction = CreateDebugLogger("CAMP_CONNECTION_HELPER")) {
 
         this.url = new URL(host);
         this.url.searchParams.set("authorization", `Bearer ${bearer}`);
-        this.url.searchParams.set("x-cryo-sid", String(sid));
+        this.url.searchParams.set("x-CAMP-sid", String(sid));
 
         for (const [key, value] of Object.entries(this.additionalQueryParamsMap)) {
             this.url.searchParams.set(key, value);

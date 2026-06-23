@@ -26,7 +26,7 @@ export interface CAMPClientWebsocketSession {
     emit<U extends keyof ICAMPClientWebsocketSessionEvents>(event: U, ...args: Parameters<ICAMPClientWebsocketSessionEvents[U]>): boolean;
 }
 
-enum CryoCloseCode {
+enum CloseCode {
     CLOSE_GRACEFUL = 4000,
     CLOSE_CLIENT_ERROR = 4001,
     CLOSE_SERVER_ERROR = 4002
@@ -47,10 +47,10 @@ enum WebsocketCloseCode {
     TLS_HANDSHAKE_FAILED = 1015
 }
 
-const DoReconnect = [WebsocketCloseCode.NORMAL, WebsocketCloseCode.GOING_AWAY, CryoCloseCode.CLOSE_GRACEFUL] as const;
+const DoReconnect = [WebsocketCloseCode.NORMAL, WebsocketCloseCode.GOING_AWAY, CloseCode.CLOSE_GRACEFUL] as const;
 
 /*
-* Cryo Websocket session layer. Handles Binary formatting and ACKs and whatnot
+* CAMP Websocket session layer. Handles Binary formatting and ACKs and whatnot
 * */
 export class CAMPClientWebsocketSession extends EventEmitter implements CAMPClientWebsocketSession {
     private server_ack_tracker: AckTracker = new AckTracker();
@@ -74,7 +74,7 @@ export class CAMPClientWebsocketSession extends EventEmitter implements CAMPClie
         source.on(event, (message) => this.emit(event, message));
     }
 
-    private constructor(private socket: WebSocket, private connectionHelper: CAMPConnectionHelper, private sid: bigint, private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
+    private constructor(private socket: WebSocket, private connectionHelper: CAMPConnectionHelper, private sid: bigint, private log: DebugLoggerFunction = CreateDebugLogger("CAMP_CLIENT_SESSION")) {
         super();
 
         this.base = new CAMPBaseManager(
@@ -185,15 +185,15 @@ export class CAMPClientWebsocketSession extends EventEmitter implements CAMPClie
     }
 
     private async HandleError(err: Error) {
-        this.log(`${err.name} Exception in CryoSocket: ${err.message}`);
-        this.socket.close(CryoCloseCode.CLOSE_SERVER_ERROR, `CryoSocket ${this.sid} was closed due to an error.`);
+        this.log(`${err.name} Exception in CAMPSocket: ${err.message}`);
+        this.socket.close(CloseCode.CLOSE_SERVER_ERROR, `CAMPSocket ${this.sid} was closed due to an error.`);
     }
 
     private TranslateCloseCode(code: number): string {
-        switch (code as CryoCloseCode | WebsocketCloseCode) {
+        switch (code as CloseCode | WebsocketCloseCode) {
             case WebsocketCloseCode.NORMAL:
             case WebsocketCloseCode.GOING_AWAY:
-            case CryoCloseCode.CLOSE_GRACEFUL:
+            case CloseCode.CLOSE_GRACEFUL:
                 return "Connection closed normally.";
             case WebsocketCloseCode.ABNORMAL_CLOSURE:
                 return "Connection closed abnormally (no close frame received).";
@@ -215,9 +215,9 @@ export class CAMPClientWebsocketSession extends EventEmitter implements CAMPClie
                 return "Connection closed because a message was too large.";
             case WebsocketCloseCode.TLS_HANDSHAKE_FAILED:
                 return "Connection closed due to TLS handshake failure.";
-            case CryoCloseCode.CLOSE_CLIENT_ERROR:
+            case CloseCode.CLOSE_CLIENT_ERROR:
                 return "Connection closed due to a client error.";
-            case CryoCloseCode.CLOSE_SERVER_ERROR:
+            case CloseCode.CLOSE_SERVER_ERROR:
                 return "Connection closed due to a server error.";
             default:
                 return "Unspecified cause for connection closure.";
@@ -244,7 +244,7 @@ export class CAMPClientWebsocketSession extends EventEmitter implements CAMPClie
     }
 
     public Close(): void {
-        this.Destroy(CryoCloseCode.CLOSE_GRACEFUL, "Client finished.");
+        this.Destroy(CloseCode.CLOSE_GRACEFUL, "Client finished.");
     }
 
     private next_txid(): number {
